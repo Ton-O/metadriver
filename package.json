@@ -1,15 +1,15 @@
 {
-  "_from": "github:jac459/metadriver",
-  "_id": "@jac459/metadriver@1.2.0",
+  "_from": "github:Ton-O/metadriver/",
+  "_id": "@Ton-O/metadriver/@1.2.0",
   "_inBundle": false,
   "_integrity": "",
-  "_location": "/@jac459/metadriver",
+  "_location": "/@Ton-O/metadriver/",
   "_phantomChildren": {},
   "_requested": {
     "type": "git",
-    "raw": "jac459/metadriver",
-    "rawSpec": "jac459/metadriver",
-    "saveSpec": "github:jac459/metadriver",
+    "raw": "Ton-O/metadriver/",
+    "rawSpec": "Ton-O/metadriver/",
+    "saveSpec": "github:Ton-O/metadriver/",
     "fetchSpec": null,
     "gitCommittish": null
   },
@@ -17,14 +17,14 @@
     "#USER",
     "/"
   ],
-  "_resolved": "github:jac459/metadriver#dbc481e2e89d5fc24de110ccc828faaad3e33d4c",
-  "_spec": "jac459/metadriver",
+  "_resolved": "github:Ton-O/metadriver/#dbc481e2e89d5fc24de110ccc828faaad3e33d4c",
+  "_spec": "Ton-O/metadriver/,
   "_where": "/home/pi/.meta",
   "author": {
     "name": "jac459"
   },
   "bugs": {
-    "url": "https://github.com/jac459/metadriver/issues"
+    "url": "https://github.com/Ton-O/metadriver/issues"
   },
   "bundleDependencies": false,
   "dependencies": {
@@ -52,7 +52,7 @@
   "devDependencies": {
     "eslint": "^7.8.1"
   },
-  "homepage": "https://github.com/jac459/metadriver#readme",
+  "homepage": "https://github.com/Ton-O/metadriver/#readme",
   "keywords": [
     "neeo",
     "meta",
@@ -60,13 +60,13 @@
   ],
   "license": "MIT",
   "main": "meta.js",
-  "name": "@jac459/metadriver",
+  "name": "@Ton-O/metadriver/",
   "publishConfig": {
     "registry": "https://npm.pkg.github.com/"
   },
   "repository": {
     "type": "git",
-    "url": "git://github.com/jac459/metadriver.git"
+    "url": "git://github.com/Ton-O/metadriver/.git"
   },
   "scripts": {
     "start": "node meta.js",
