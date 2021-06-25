@@ -1,8 +1,9 @@
 This is a fork of JAC's excellent metadriver: https://github.com/jac459/metadriver
-I created this fork to add some improvements that did not make it into JAC's version.
+I created this fork to add some improvements that I found useful, but did not make it into JAC's version.
 I'm trying to keep it compatible with JAC's version as much as possible, but it is inevitable that at some point in time, they will deviate too much to keep them compatible.
 
-The development and maintenance of this version is pure hobby; I'm sharing the code "as-is", though you're encouraged to report ny bugs or improvements you see.
+The development and maintenance of this version is pure hobby. I used to develop Meta-drivers for the community, but the lack of interest and feedback/appreciation made me change my mind: I now develop solely for my own need, but keep sharing what I have through Github.  
+Though I'm sharing the code "as-is", you're still encouraged to use the code and report any bugs or improvements you see.
 
 # metadriver
 Programmable driver for NEEO to control any device and generate complex integration.
