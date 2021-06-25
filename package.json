@@ -62,7 +62,7 @@
   ],
   "license": "MIT",
   "main": "meta.js",
-  "name": "@Ton-O/metadriver/",
+  "name": "@Ton-o/metadriver",
   "publishConfig": {
     "registry": "https://npm.pkg.github.com/"
   },
