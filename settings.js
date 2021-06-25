@@ -22,7 +22,7 @@ var settings =
           'UserLibrary':'/steady/neeo-custom/UserLibrary',
           'CoreLibrary':'Library',
           'TriggerKey':'',
-          'Manifest':'https://raw.githubusercontent.com/jac459/metadriver/master/CustomDrivers.manifest',
+          'Manifest':'https://raw.githubusercontent.com/Ton-O//metadriver/master/CustomDrivers.manifest',
           'DriverName': '',
           'DriverLocation':'',
           'DriverIcon':'',
