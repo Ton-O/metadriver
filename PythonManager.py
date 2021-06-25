@@ -1,17 +1,19 @@
-#!/usr/bin/env python
+from flask import Flask, request, jsonify
+import json
+import broadlink
+import time
+import binascii
+import struct
+import math
+from broadlink.exceptions import ReadError, StorageError
+from flask import request
 
-import asyncio
-import websockets
-from urllib.parse import urlparse, parse_qs
+# Files for ADB_Shell commands: over network
 from adb_shell.adb_device import AdbDeviceTcp, AdbDeviceUsb
 from adb_shell.auth.sign_pythonrsa import PythonRSASigner
-
 import logging
-import time
 
-#logger = logging.getLogger('websockets')
-#logging.basicConfig(level=logging.INFO)
-#logger = logging.getLogger(__name__)
+logging.getLogger().setLevel(logging.DEBUG)
 
 logger = logging.getLogger('websockets')
 logger.setLevel(logging.INFO)
@@ -30,72 +32,22 @@ ch.setFormatter(formatter)
 logger.addHandler(ch)
 
 
+TIMEOUT = 30  # Timeout for learn
+TICK = 32.84
 ConnectedHosts = []
 ADBHostList = {}
-BroadlinkHostList = []
-# AdbDeviceTcp(1,555,default_transport_timeout_s=9.)
-def DateAndTime():
-    return time.strftime("%Y-%m-%d %H:%M:%S")
+ADBDevice = ""
 
-def Connect_ADB(host):
-    global ADBDevice
-    global ConnectedHosts
-    logger.info("ADB_Driver: connecting to host: "+host)
-    try:                                            # Checking if we are already connected.
-       ADBDevice = ADBHostList[host]["ADBSocket"]       
-       return 
-    except:
-        logger.info("Setting up connection ADB with "+host)
+### Full credits need to go to Felipe Diel / MJG59 for his EXCELLENT Broadlink driver. 
+# A lot of code in this program was inspired or even obtained from hs fgithub site: https://github.com/mjg59/python-broadlink
+### So all credits need to go to him..........
 
-    ADBDevice = AdbDeviceTcp(host, 5555, default_transport_timeout_s=5.)
-    ## Load the public and private keys so we can connect to Android and authenticate ourself (also for future use) 
-    adbkey = '/home/neeo/ADB_Shell_key'
-    with open(adbkey) as f:
-        priv = f.read()
+def shutdown_server():
+    func = request.environ.get('werkzeug.server.shutdown')
+    if func is None:
+        raise RuntimeError('Not running with the Werkzeug Server')
+    func()
 
-    with open(adbkey + '.pub') as f:
-        pub = f.read()
-    signer = PythonRSASigner(pub, priv)
-
-    ADBDevice.connect(rsa_keys=[signer],auth_timeout_s=5)
-
-    ADBHostList.setdefault(host, {})["ADBSocket"] = ADBDevice
-    logger.info("Hostlist is now ")
-    logger.info(ADBHostList)
-
-    return 
-    
-def Send_ADB(Command,AsRoot,host ):
-    global ADBDevice
-
-    if AsRoot == 'yes':
-        Response = ADBDevice.root()
-    Response = ADBDevice.shell(Command)
-    return Response
-
-def ADB(Arguments): 
-    global ADBDevice
-    global ConnectedHosts
-    Parms = ["asroot","host","command"]
-    MyParm = []
-    # following code will fill list MyParm with the passed arguments, "" is param is not supplied: 1=asroot,2=host,3=command
-    isRequired = False      # first parameter `(asroot) isn't required
-    for x in range(len(Parms)):
-        try:
-            MyParm.append(Arguments[Parms[x]][0]) 
-        except Exception as err:
-            MyParm.append("") # mzke sure the number of parameters in list  is okay.
-            if isRequired:
-                logger.error("An exception occurred, no " + Parms[x] +" parameter was provided")
-                return "An exception occurred, no " + Parms[x] + " parameter was provided"
-        isRequired = True
-        
-    Connect_ADB(MyParm[1])      # Call connect function, that will see if we actually need to connect or reuse an existing connection
-
-    MyResponse = Send_ADB(MyParm[2],MyParm[0],MyParm[1]) # Command,AsRoot,host
-    return MyResponse
-
-## below code is the actual code for handling Broadlink-methods
 def format_durations(data):
     result = ''
     for i in range(0, len(data)):
@@ -171,12 +123,10 @@ def Convert_GC_to_Broadlink(stream):
     return result 
 
 def Convert_Broadlink_to_GC(stream): 
-    logger.info("Connect_Broadlink....")
     #First convert Broadlink-format to Lirc
     data = bytearray.fromhex(''.join(stream))
     durations = to_microseconds(data)
-    logger.info("Broadlink: durations ")
-    logger.info(durations)
+    print("Broadlink: durations",durations)
     #Then convert format from Lirc to GC
     result = lirc2gc(durations)
     return result
@@ -187,75 +137,145 @@ def Convert_Broadlink_to_GC(stream):
 # GC 'sendir,1:1,1,37825,1,1,171,171,21,64,21,64,21,64,21,21,21,21,21,21,21,21,21,21,21,64,21,64,21,64,21,21,21,21,21,21,21,21,21,21,21,64,21,64,21,64,21,21,21,21,21,21,21,21,21,21,21,21,21,21,21,21,21,64,21,64,21,64,21,64,21,64,21,1776'
 
 
-def Connect_Broadlink(Arguments):
-   logger.info("Connect_Broadlink....")
-   #host = request.args.get('host')
-   #type = int(request.args.get('type'),16) 
-   #mac  = bytearray.fromhex(request.args.get('mac'))
-   host = Arguments["host"][0]
-   type = int(Arguments["type"][0],16)
-   mac = bytearray.fromhex(Arguments["mac"][0])
-   logger.info("host, type, mac: " +host +" "  + type + " " + mac)
+def Connect_Broadlink():
+
+   host = request.args.get('host')
+   type = int(request.args.get('type'),16) 
+   mac  = bytearray.fromhex(request.args.get('mac'))
+   print("host, type, mac:",host,type,mac)
    dev = broadlink.gendevice(type, (host, 80), mac)
-   logger.info("We have a device") 
+   print("We have a device") 
    dev.auth()
-   logger.info('dev=')
-   logger.info(dev)
+   print('dev=',dev)
    return dev
 
-def _xmit(Arguments):
-    logger.info("Broadlink_Driver: xmit-request")
 
-    dev = Connect_Broadlink(Arguments)  
-    logger.info("Broadlink_Driver: Connection to Broadlink succeeded")
-    #data = request.args.get('stream')
-    data = Arguments["stream"][0]
-    logger.info("Broadlink_Driver: Sending data " + data)
+def Connect_ADB():
+    global ADBDevice
+    host = request.args.get('host')
+    print("ADB_Driver: host:",host)
+    logger.info("ADB_Driver: connecting to host: "+host)
+    try:                                            # Checking if we are already connected.
+       ADBDevice = ADBHostList[host]["ADBSocket"]       
+       return 
+    except:
+        logger.info("Setting up connection ADB with "+host)
+
+    ADBDevice = AdbDeviceTcp(host, 5555, default_transport_timeout_s=5.)
+    ## Load the public and private keys so we can connect to Android and authenticate ourself (also for future use) 
+    adbkey = '/home/pi/adbkey'
+    with open(adbkey) as f:
+        priv = f.read()
+
+    with open(adbkey + '.pub') as f:
+        pub = f.read()
+    signer = PythonRSASigner(pub, priv)
+
+    ADBDevice.connect(rsa_keys=[signer],auth_timeout_s=5)
+
+    ADBHostList.setdefault(host, {})["ADBSocket"] = ADBDevice
+    logger.info("Hostlist is now ")
+    logger.info(ADBHostList)
+    return
+
+def Send_ADB():
+    global ADBDevice
+    logger.info(ADBDevice)
+    # Send a shell command
+    Command = request.args.get('command')
+    AsRoot = request.args.get('root',default='')
+    print("Asroot is:",AsRoot)
+    if AsRoot == 'yes':  
+        Response = ADBDevice.root()
+    print("Command is:",Command)
+    Response = ADBDevice.shell(Command)
+    if Response is None:
+        return {}
+
+    Response = Response.strip().split("\r\n")
+    retcode = Response[-1]
+    output = "\n".join(Response[:-1])
+
+    return {"retcode": retcode, "output": output}
+    #return Response
+
+app = Flask(__name__)
+
+@app.route('/')
+def index():
+    return 'Server Works!'
+
+@app.route('/QUIT')
+def quit():
+    print("Received shutdown request")
+    # return 'Quitting'
+    shutdown_server()
+    return 'Server shutting down...'    
+  
+@app.route('/adb',  methods=['GET','POST'])
+def _adb():
+    print("ADB_Driver:")
+    ADBDevice = Connect_ADB()  
+    print("ADB_Driver: Connection to device succeeded")
+    Response = Send_ADB()
+    return Response 
+
+
+@app.route('/xmit',  methods=['GET','POST'])
+def _xmit():
+    print("Broadlink_Driver: xmit-request")
+    dev = Connect_Broadlink()  
+    print("Broadlink_Driver: Connection to Broadlink succeeded")
+    data = request.args.get('stream')
+    print("Broadlink_Driver: Sending data", data)
     SendThis = bytearray.fromhex(data)
     dev.send_data(SendThis)
     return 'OK'
 
-def _xmitGC(Arguments):
-    logger.info("Broadlink_Driver: Send GC requested")
+
+@app.route('/xmitGC', methods=['GET','POST'])
+def _xmitGC():
+    print("Broadlink_Driver: Send GC requested")
     dev = Connect_Broadlink()  
-    logger.info("Broadlink_Driver: Connection to Broadlink succeeded")
-    #data = request.args.get('stream')
-    data = Arguments["stream"][0]
-    logger.info("Broadlink_Driver: Input data " + data)
+    print("Broadlink_Driver: Connection to Broadlink succeeded")
+    data = request.args.get('stream')
+    print("Broadlink_Driver: Input data", data)
 
     # Now convert the Global Cache format to our format
-    logger.info("Broadlink_Driver: GC data "+ data)    
+    print("Broadlink_Driver: GC data", data)    
     ConvData = Convert_GC_to_Broadlink(data)    
-    logger.info("Broadlink_Driver: Conversion done, sending this data "+ ConvData)
+    print("Broadlink_Driver: Conversion done, sending this data", ConvData)
     SendThis = bytearray.fromhex(ConvData)
     dev.send_data(SendThis)
     return 'OK'
 
+@app.route('/GCToBroad', methods=['GET','POST'])
 def ConvertBroadtoGC(Stream):
-    logger.info("Broadlink_Driver: Conversion GC to Broadlink  requested")
+    print("Broadlink_Driver: Conversion GC to Broadlink  requested")
     # Now convert the Global Cache format to our format
     ConvData = Convert_GC_to_Broadlink(Stream)    
-    logger.info("Broadlink_Driver: Conversion done, returning this data " + ConvData)
+    print("Broadlink_Driver: Conversion done, returning this data", ConvData)
     #SendThis = bytearray.fromhex(ConvData)
     SendThis = ConvData    
     return SendThis
 
-def BroadtoGC(Arguments):
-    logger.info("Broadlink_Driver: Conversion Broadlink to GC  requested")
-    #data = request.args.get('stream')
-    data = Arguments["stream"][0]
-    logger.info("Broadlink_Driver: Input data " + data)
+@app.route('/BroadtoGC', methods=['GET','POST'])
+def BroadtoGC():
+    print("Broadlink_Driver: Conversion Broadlink to GC  requested")
+    data = request.args.get('stream')
+    print("Broadlink_Driver: Input data", data)
     ConvData = ConvertBroadtoGC(data)
     # Now convert the Global Cache format to our format
-    logger.info("Broadlink_Driver: GC data " + ConvData)    
+    print("Broadlink_Driver: GC data", ConvData)    
     return ConvData 
 
-def _rcve(Arguments):
+@app.route('/rcve',  methods=['GET','POST'])
+def _rcve():
     #data = request.args.get['stream']
-    logger.info("Broadlink_Driver: Learning requested")
+    print("Broadlink_Driver: Learning requested")
     dev = Connect_Broadlink()
-    logger.info("Broadlink_Driver: Connection to Broadlink succeeded")    
-    logger.info("Broadlink_Driver: Learning for" + TIMEOUT +"ms")
+    print("Broadlink_Driver: Connection to Broadlink succeeded")    
+    print("Broadlink_Driver: Learning for",TIMEOUT,"ms")
     dev.enter_learning()
     start = time.time()
     while time.time() - start < TIMEOUT:
@@ -267,57 +287,20 @@ def _rcve(Arguments):
         else:
             break
     else:
-        #logger.info("No data received...")
+        #print("No data received...")
         return 'timeout'
     Learned = ''.join(format(x, '02x') for x in bytearray(data))
-    logger.info("Broadlink_Driver: Learned:"+ Learned)
+    print("Broadlink_Driver: Learned:", Learned)
     return Learned
 
-def _rcveGC(Arguments):
-    logger.info("rcveGC....")
-
+@app.route('/rcveGC',  methods=['GET','POST'])
+def _rcveGC():
     Learned=_rcve()
     return ConvertBroadtoGC(Learned)
 
+def main():
+    app.run(host='0.0.0.0', port=5000)
 
-def Validate_Method(Arguments):
-    try:
-        MyMethod = Arguments["method"][0]
-    except:
-        logger.info("Missing method, returning unsuccessful request")
-        return "Exception: Missing method"
-
-    MyMethod = MyMethod.lower()
-    logger.info("Method = "+MyMethod)
-    if MyMethod ==  "adb": 
-        return ADB(Arguments) 
-    elif MyMethod ==  "xmit":
-        return _xmit(Arguments) 
-    elif MyMethod ==  "xmitgc": 
-        return _xmitGC(Arguments) 
-    elif MyMethod ==  ("gctobroad"):
-        return ConvertBroadtoGC(Arguments) 
-    elif MyMethod ==  ("broadtogc"):
-        return BroadtoGC(Arguments) 
-    elif MyMethod ==  ("rcve"):
-        return _rcve(Arguments) 
-    elif MyMethod ==  ("rcvegc"):
-        return _rcveGC(Arguments) 
-    else:
-        logger.error("Exception....")
-        return "Exception, unknown method: " + MyMethod
-
-async def Determine_Method(websocket,path): 
-    try:
-        async for message in websocket:
-           Arguments = parse_qs(message)
-           MyResponse = Validate_Method(Arguments) 
-           await websocket.send(MyResponse)
-    except websockets.ConnectionClosed as exc:
-          logger.info('Connection with .Meta closed')
-          logger.info(exc)
-
-asyncio.get_event_loop().run_until_complete(
-    websockets.serve(Determine_Method, 'localhost', 8765))
-logger.info("Accepting websocket-connections on port 8765")
-asyncio.get_event_loop().run_forever()
+        
+if __name__ == '__main__':
+    main()
