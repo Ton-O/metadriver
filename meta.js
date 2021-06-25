@@ -3,6 +3,10 @@ const path = require('path');
 const settings = require(path.join(__dirname,'settings'));
 const neeoapi = require("neeo-sdk");
 const metacontrol = require(path.join(__dirname,'metaController'));
+const cacheManager = require(path.join(__dirname,'cacheManager'));
+const CacheEntryTemp = "TEMP";
+const CacheEntryCompleted = "COMPLETED";
+const CacheEntryNotFound = '';
 
 //Discovery tools
 const dnssd = require('dnssd2');
@@ -15,7 +19,7 @@ const BUTTONHIDE = '__';
 const DATASTOREEXTENSION = 'DataStore.json';
 const DEFAULT = 'default'; //NEEO SDK deviceId default value for devices
 const mqtt = require('mqtt');
-const { metaMessage, LOG_TYPE, initialiseLogComponents, initialiseLogSeverity } = require("./metaMessage");
+const { metaMessage, OverrideLoglevel, LOG_TYPE, initialiseLogComponents, initialiseLogSeverity } = require("./metaMessage");
 
 config = {brainip : '', brainport : ''};
 function returnBrainIp() { return config.brainip;}
@@ -28,7 +32,10 @@ exports.localDevices = localDevices;
 exports.localByMacDevices = localByMacDevices;
 exports.neeoBrainIp = returnBrainIp;
 var mqttClient;
-
+var DoingDiscoveryMySelf=false;
+const DelayTime = 250;
+var neeoSettings;
+var EliminatingRepeatedActions=false; //used to prevent repeatedly executing meta-commands fromm the aspp.
 //LOGGING SETUP AND WRAPPING
 //Disable the NEEO library console warning.
 console.error = console.info = console.debug = console.warn = console.trace = console.dir = console.dirxml = console.group = console.groupEnd = console.time = console.timeEnd = console.assert = console.profile = function() {};
@@ -133,6 +140,7 @@ function getDataStorePath(filename) {
 
 function createDevices () {
   return new Promise(function (resolve, reject) {
+    try { 
     getActivatedDrivers().then((drivers) => {
       drivers = drivers.concat(settings.drivers);
       const driverCreationTable = [];
@@ -144,11 +152,15 @@ function createDevices () {
         resolve(driverTable);
       })
     })
+  }
+  catch (err) {metaLog({deviceId: deviceId, type:LOG_TYPE.ERROR, content:'Error in createDevices ' + err});}
   })
+
 }
 
 function discoveredDriverListBuilder(inputRawDriverList, outputPreparedDriverList, indent, controller, targetDeviceId) {
   return new Promise (function (resolve, reject) {
+  try { 
     if (indent < inputRawDriverList.length) {
       if (inputRawDriverList[indent].dynamicname && inputRawDriverList[indent].dynamicname != "") {
         if (targetDeviceId == undefined || targetDeviceId == inputRawDriverList[indent].dynamicid)
@@ -162,6 +174,7 @@ function discoveredDriverListBuilder(inputRawDriverList, outputPreparedDriverLis
               device : builtdevice
             }
             outputPreparedDriverList.push(discoveredDevice);
+
             driverTable.push(builtdevice);
             if (targetDeviceId == undefined) {//initial creation of the driver, need the full list to be returned
               resolve(discoveredDriverListBuilder(inputRawDriverList, outputPreparedDriverList, indent+1, controller, targetDeviceId));
@@ -179,42 +192,51 @@ function discoveredDriverListBuilder(inputRawDriverList, outputPreparedDriverLis
       }
       else {
         resolve(discoveredDriverListBuilder(inputRawDriverList, outputPreparedDriverList, indent+1, controller, targetDeviceId));
+        }
       }
-    }
-    else {resolve (outputPreparedDriverList);}
-  })
+    else 
+      resolve (outputPreparedDriverList);}
+    catch (err) {metaLog({deviceId: deviceId, type:LOG_TYPE.ERROR, content:'Error in discoveredDriverListBuilder ' + err});}
+    
+    })
 }
 
 function instanciationHelper(controller, givenResult, jsonDriver) {
   jsonDriver = JSON.stringify(jsonDriver);
   let slicedDriver = jsonDriver.split("DYNAMIK_INST_START ");
-  let recontructedDriver = slicedDriver[0];
+  let reconstructedDriver = slicedDriver[0];
   for (let index = 1; index < slicedDriver.length; index++) {
     //TODO Correct ugly hack suppressing the escape of quote..
     let tempoResult = slicedDriver[index].split(" DYNAMIK_INST_END")[0].replace(/\\/g, "");
     //let tempoResult = slicedDriver[index].split(" DYNAMIK_INST_END")[0];
     tempoResult = controller.vault.readVariables(tempoResult, DEFAULT);
     tempoResult = controller.assignTo("$Result", tempoResult, givenResult);
-    recontructedDriver = recontructedDriver + tempoResult;
-    recontructedDriver = recontructedDriver + slicedDriver[index].split(" DYNAMIK_INST_END")[1];
+    reconstructedDriver = reconstructedDriver + tempoResult;
+    reconstructedDriver = reconstructedDriver + slicedDriver[index].split(" DYNAMIK_INST_END")[1];
   }
-  metaLog({type:LOG_TYPE.VERBOSE, content:'recontructedDriver'});
-  metaLog({type:LOG_TYPE.VERBOSE, content:recontructedDriver});
+  metaLog({type:LOG_TYPE.VERBOSE, content:'reconstructedDriver'});
+  metaLog({type:LOG_TYPE.DEBUG, content:reconstructedDriver});
 
-  return JSON.parse(controller.vault.readVariables(recontructedDriver, DEFAULT));
+  return JSON.parse(controller.vault.readVariables(reconstructedDriver, DEFAULT));
 }
 
 function discoveryDriverPreparator(controller, driver, deviceId, targetDeviceId) {
+  metaLog({deviceId: deviceId, type:LOG_TYPE.DEBUG, content:'DiscoveryDriverPreparator'});
+  
   return new Promise(function (resolve, reject) {
-                      
+
+            try {           
+
     if (driver.discover) {
+
       let instanciationTable = [];
+
       controller.initiateProcessor(driver.discover.command.type).then(() => {
         controller.commandProcessor(driver.discover.command.command, driver.discover.command.type, deviceId).then((result)=>{
-            controller.queryProcessor(result, driver.discover.command.queryresult, driver.discover.command.type, deviceId).then((result) => {
+
+          controller.queryProcessor(result, driver.discover.command.queryresult, driver.discover.command.type, deviceId).then((result) => {
             if (driver.discover.command.evalwrite) {controller.evalWrite(driver.discover.command.evalwrite, result, deviceId)};
-                metaLog({deviceId: deviceId, type:LOG_TYPE.VERBOSE, content:'discovery Driver Preparation, query result'});
-                metaLog({deviceId: deviceId, type:LOG_TYPE.VERBOSE, content:result});
+
             if (!Array.isArray(result)) {
               let tempo = [];
               tempo.push(result);
@@ -228,11 +250,14 @@ function discoveryDriverPreparator(controller, driver, deviceId, targetDeviceId)
           })
         })
       })
+
     }
-    else {
+    else 
       resolve();
-    }
+  }
+    catch (err) {metaLog({deviceId: deviceId, type:LOG_TYPE.ERROR, content:'Error in discoveryDriverPreparator ' + err});}
   })
+
 }
 
 function getRegistrationCode(controller, credentials, driver, deviceId){
@@ -251,11 +276,10 @@ function getRegistrationCode(controller, credentials, driver, deviceId){
 
 function registerDevice(controller, driver, deviceId) {
   return new Promise(function (resolve, reject) {
-    controller.actionManager(DEFAULT, driver.register.registrationcommand.type, driver.register.registrationcommand.command, 
-                          driver.register.registrationcommand.queryresult, '', driver.register.registrationcommand.evalwrite)
+    controller.actionManager(DEFAULT, driver.register.registrationcommand.type, driver.register.registrationcommand.command, driver.register.registrationcommand.queryresult, '', driver.register.registrationcommand.evalwrite)
     .then((result) => {
       metaLog({deviceId: deviceId, type:LOG_TYPE.VERBOSE, content:'Result of the registration command: '});
-      metaLog({deviceId: deviceId, type:LOG_TYPE.VERBOSE, content:result});
+      metaLog({deviceId: deviceId, type:LOG_TYPE.DEBUG, content:result});
 
       controller.reInitVariablesValues(deviceId);
       controller.reInitConnectionsValues(deviceId);
@@ -352,8 +376,27 @@ function assignControllers(controller, driver, currentDeviceId) {
   }
 }
 
+function KeepTaskInWaitTillCacheCompleted(loopCount,targetDeviceId,CachedDiscovery) {
+
+  if (loopCount--) {
+    if (loopCount%4==0)
+      metaLog({deviceId: targetDeviceId, type:LOG_TYPE.WARNING, content:"Discovery waiting time left max " + (loopCount/4).toString() + " sec" });
+    setTimeout(() => {
+      CachedDiscovery = cacheManager.ValidateDiscoveryCache(targetDeviceId);
+      if (CachedDiscovery.state==CacheEntryCompleted )  {
+        metaLog({deviceId: targetDeviceId, type:LOG_TYPE.WARNING, content:"Waitloop: Discovery got completed cache, resuming " + targetDeviceId});
+        return CachedDiscovery;}
+      else 
+        KeepTaskInWaitTillCacheCompleted(loopCount,targetDeviceId,CachedDiscovery)   
+    }, DelayTime);
+  }
+  else 
+    metaLog({deviceId: targetDeviceId, type:LOG_TYPE.ERROR, content:"Parallel discovery waiting time exceeded , releasing now" });
+}
+
 
 function executeDriverCreation (driver, hubController, deviceId) { 
+  var targetDeviceId;
     return new Promise(function (resolve, reject) {
     //driverTable.length = 0; //Reset the table without cleaning the previous reference (to avoid destructing other devices when running Discovery).
       let currentDeviceId = deviceId ? deviceId : DEFAULT; //to add the deviceId of the real discovered device in the Helpers
@@ -370,7 +413,7 @@ function executeDriverCreation (driver, hubController, deviceId) {
             theDevice.setIcon(driver.icon)
         }
         if (driver.alwayson) {
-          theDevice.addCapability("alwaysOn");
+           theDevice.addCapability("alwaysOn");
         }
         
        //CREATING VARIABLES
@@ -397,10 +440,13 @@ function executeDriverCreation (driver, hubController, deviceId) {
       //GET ALL CONNECTIONS
       controller.addConnection({"name":"socketIO", "connections":[]})
       controller.addConnection({"name":"webSocket", "connections":[]})
+      controller.addConnection({"name":"socketIO", "connections":[]})
+      controller.addConnection({"name":"telnet", "connections":[]})
       controller.addConnection({"name":"jsontcp", "descriptor":driver.jsontcp, "connector":""})
       if (settings.mqtt) {
         metaLog({deviceId: deviceId, type:LOG_TYPE.INFO, content:'Creating the connection MQTT'});
         controller.addConnection({"name":"mqtt", "descriptor":settings.mqtt, "connector":mqttClient})//early loading
+
         //controller.initiateProcessor('mqtt');
       }
       if (driver.repl) {
@@ -423,10 +469,10 @@ function executeDriverCreation (driver, hubController, deviceId) {
           })
         }
 
-  
+
         //DISCOVERY  
         if (driver.discover) {
-          metaLog({deviceId: currentDeviceId, type:LOG_TYPE.INFO, content:'Starting discovery process.'});
+          DoingDiscoveryMySelf = true;
           theDevice.enableDiscovery(
             {
               headerText: driver.discover.welcomeheadertext,
@@ -434,18 +480,55 @@ function executeDriverCreation (driver, hubController, deviceId) {
               enableDynamicDeviceBuilder: true,
             },
             (targetDeviceId) => {
-              return new Promise(function (resolve, reject) {
-                  discoveryDriverPreparator(controller, driver, currentDeviceId, targetDeviceId).then((driverList) => {
+              metaLog({deviceId: targetDeviceId, type:LOG_TYPE.INFO, content:"Discovery: NEEO requested for: " + targetDeviceId + " " + driver.name });
+              if (targetDeviceId == undefined)  { //Original code
+                console.log("Native discovery now:")
+                metaLog({deviceId: targetDeviceId, type:LOG_TYPE.INFO, content:"Discovery: result# Bypassing cache (undefined targetid): " + driver.name });
+                return new Promise(function (resolve, reject) {
+                discoveryDriverPreparator(controller, driver, currentDeviceId, targetDeviceId).then((driverList) => {
                   const formatedTable = [];
                   discoveredDriverListBuilder(driverList, formatedTable, 0, controller, targetDeviceId).then((outputTable) => {
-                    //controller.vault.snapshotDataStore();  avoid tireness on drive.
                     resolve(outputTable); 
                   })
                 })
               })
-            }
-          )
-        }
+              }
+              else
+               return new Promise(function (resolve, reject) {
+                var CachedDiscovery;                
+                CachedDiscovery = cacheManager.ValidateDiscoveryCache(targetDeviceId);
+                  if (CachedDiscovery == CacheEntryNotFound) { // First time an existing device is discovered again
+                    metaLog({deviceId: targetDeviceId, type:LOG_TYPE.VERBOSE, content:"Discovery: Init#Starting actual discovery for: " + targetDeviceId + " " + driver.name });
+                    cacheManager.AddDiscoveryCache(targetDeviceId,"Discovery started",CacheEntryTemp);
+                    return new Promise(function (resolve, reject) {
+                      discoveryDriverPreparator(controller, driver, currentDeviceId, targetDeviceId).then((driverList) => {
+                        const formatedTable = [];
+                        discoveredDriverListBuilder(driverList, formatedTable, 0, controller, targetDeviceId).then((outputTable) => {
+                          cacheManager.AddDiscoveryCache(targetDeviceId,outputTable,CacheEntryCompleted);
+                          metaLog({deviceId: targetDeviceId, type:LOG_TYPE.INFO, content:"Discovery: result#Adding final cache-entry " + targetDeviceId + " " + driver.name  });
+                          metaLog({deviceId: targetDeviceId, type:LOG_TYPE.DEBUG, content:outputTable });
+                          resolve(outputTable);
+                        })
+                      })
+                    })
+                  }
+                  else 
+                    if (CachedDiscovery.state==CacheEntryCompleted) {// next time an existing device is discovered again, it was already resolved the first time
+                        metaLog({deviceId: targetDeviceId, type:LOG_TYPE.INFO, content:"Discovery: result#Cache direct-return for: " + targetDeviceId + " " + driver.name });
+                        resolve(CachedDiscovery.outputTable);
+                      }
+                    else {// next time an existing device is discovered again, it has not yet been resolved for the first time
+                      metaLog({deviceId: targetDeviceId, type:LOG_TYPE.INFO, content:"Discovery: init#Parking: " + targetDeviceId + " " + driver.name });
+                      DoParkedDiscovery(targetDeviceId,driver,currentDeviceId,controller).then((myResult) => {
+                        CachedDiscovery = cacheManager.ValidateDiscoveryCache(targetDeviceId);
+                        resolve(CachedDiscovery.outputTable);
+                      })
+                    }
+                
+              })
+            })
+          }
+
         controller.reInitConnectionsValues(currentDeviceId);
         
         //CREATING LISTENERS
@@ -466,71 +549,6 @@ function executeDriverCreation (driver, hubController, deviceId) {
           }
         }
         
-
-        //CREATING WIDGETS
-  /*
-        for (var prop in driver.players) { // Dynamic creation of players
-          if (Object.prototype.hasOwnProperty.call(driver.players, prop)) {
-            const myDirectory = controller.directoryH[controller.directoryH.findIndex((helper) => {return (helper.name == driver.players[prop].rootdirectory)})];
-            const myQueueDirectory = controller.directoryH[controller.directoryH.findIndex((helper) => {return (helper.name == driver.players[prop].queuedirectory)})];
-            const myVolume = controller.sliderH[controller.sliderH.findIndex((helper) => {return (helper.name == driver.players[prop].volume)})];
-            const myCoverArt = controller.sensorH[controller.sensorH.findIndex((helper) => {return (helper.name == driver.players[prop].cover)})];
-            const myTitle = controller.sensorH[controller.sensorH.findIndex((helper) => {return (helper.name == driver.players[prop].title)})]
-            const myDescription = controller.sensorH[controller.sensorH.findIndex((helper) => {return (helper.name == driver.players[prop].description)})]
-            const myPlayingSwitch = controller.switchH[controller.directoryH.findIndex((helper) => {return (helper.name == driver.players[prop].IsPlaying)})]
-            const myMuteSwitch = controller.switchH[controller.directoryH.findIndex((helper) => {return (helper.name == driver.players[prop].IsMuted)})]
-            const myShuffleSwitch = controller.switchH[controller.directoryH.findIndex((helper) => {return (helper.name == driver.players[prop].IsShuffle)})]
-            const myRepeatSwitch = controller.switchH[controller.directoryH.findIndex((helper) => {return (helper.name == driver.players[prop].IsRepeat)})]
-            theDevice.addPlayerWidget({
-              rootDirectory: {
-                name: 'Collection', 
-                label: 'My Collection', 
-                controller: { 
-                  getter: (deviceId, params) => {return new Promise(function (resolve, reject) { resolve(myDirectory.fetchList(deviceId, params))})},
-                  action:(deviceId, params) => {myDirectory.handleAction(deviceId,params)},
-                }
-              },
-              queueDirectory: {
-                name: 'Queue', 
-                label: 'Playing Queue', 
-                controller: { 
-                  getter: (deviceId, params) => {return new Promise(function (resolve, reject) { resolve(myQueueDirectory.fetchList(deviceId, params))})},
-                  action:(deviceId, params) => {myQueueDirectory.handleAction(deviceId,params)},
-                }
-              },
-              volumeController: { 
-                getter:(deviceId) => {myVolume.get(deviceId)},
-                setter:(deviceId, params) => {myVolume.set(deviceId,params)},
-              },
-              coverArtController: {
-                getter:(deviceId) => {myCoverArt.get(deviceId)},
-              },
-              titleController: { 
-                getter:(deviceId) => {myTitle.get(deviceId)},
-              },
-              descriptionController: { 
-                getter:(deviceId) => {myDescription.get(deviceId)},
-              },
-              playingController: { 
-                getter:(deviceId) => {myPlayingSwitch.get(deviceId)},
-                setter:(deviceId, params) => {myPlayingSwitch.set(deviceId,params)},
-              },
-              muteController: { 
-                getter:(deviceId) => {myMuteSwitch.get(deviceId)},
-                setter:(deviceId, params) => {myMuteSwitch.set(deviceId,params)},
-              },
-              shuffleController: { 
-                getter:(deviceId) => {myShuffleSwitch.get(deviceId)},
-                setter:(deviceId, params) => {myShuffleSwitch.set(deviceId,params)},
-              },
-              repeatController: { 
-                getter:(deviceId) => {myRepeatSwitch.get(deviceId)},
-                setter:(deviceId, params) => {myRepeatSwitch.set(deviceId,params)},
-              },
-            })
-          }
-        }
-  */
           //CREATING INDIVIDUAL SHORTCUTS
 
           for (var prop in driver.buttons) { // Dynamic creation of all buttons
@@ -635,15 +653,67 @@ function executeDriverCreation (driver, hubController, deviceId) {
               initializeDeviceList: (deviceIds) => {
                 metaLog({deviceId: deviceId, type:LOG_TYPE.VERBOSE, content:"INITIALIZED DEVICES:" + deviceIds});
               },
-            }
+            } 
           )
           metaLog({deviceId: deviceId, type:LOG_TYPE.INFO, content:"Device " + driver.name + " has been created."});
-          enableMQTT(controller, currentDeviceId);
+          MetaMQTTHandler(controller, currentDeviceId);
           resolve(theDevice);
         });
       })
   })
 }
+
+async function DoParkedDiscovery(targetDeviceId,driver,currentDeviceId,controller) 
+ {var CachedDiscovery;
+  metaLog({deviceId: targetDeviceId, type:LOG_TYPE.VERBOSE, content:'Discovery: init#Parking handler ' + targetDeviceId + " " + driver.name});
+	let myCount = 0;
+    let promise =   new Promise(function (resolve, reject) {                                            
+
+                function CheckCacheState(){
+                    try {
+                        continueCheckingForCompletion();
+                    }
+                    catch (err)   {metaLog({deviceId: targetDeviceId, type:LOG_TYPE.ERROR, content:"Error in DoParkedDiscovery"})
+                                  metaLog({deviceId: targetDeviceId, type:LOG_TYPE.ERROR, content:err})}
+                }
+
+                function continueCheckingForCompletion(){
+                  CachedDiscovery = cacheManager.ValidateDiscoveryCache(targetDeviceId);
+                  if (CachedDiscovery.state==CacheEntryCompleted)                 // Is Blocking request done
+                    resolve(CachedDiscovery);
+                  else
+                    if(++myCount <120){
+                        setTimeout(CheckCacheState,DelayTime);
+                    }
+                    else{
+                        resolve('');
+                    }
+                }
+
+                continueCheckingForCompletion();
+            });
+
+    let result = await promise  
+    if (result=="") {
+      metaLog({deviceId: targetDeviceId, type:LOG_TYPE.INFO, content:'Discovery: result#Parking time ran out, doing discovery ' + targetDeviceId + " " + driver.name});
+      return new Promise(function (resolve, reject) {
+        discoveryDriverPreparator(controller, driver, currentDeviceId, targetDeviceId).then((driverList) => {
+          const formatedTable = [];
+          discoveredDriverListBuilder(driverList, formatedTable, 0, controller, targetDeviceId).then((outputTable) => {
+            cacheManager.AddDiscoveryCache(targetDeviceId,outputTable,CacheEntryCompleted);
+            metaLog({deviceId: targetDeviceId, type:LOG_TYPE.INFO, content:'Discovery: result#' + targetDeviceId + " " + driver.name});
+            return(outputTable); 
+          })
+        })
+      })
+    }
+    else {
+      metaLog({deviceId: targetDeviceId, type:LOG_TYPE.INFO, content:'Discovery: init#Released parked  ' + targetDeviceId + " " + driver.name});
+      return(CachedDiscovery.outputTable);
+    }
+        
+}
+
 
 //DISCOVERING BRAIN
         
@@ -693,18 +763,19 @@ function setupNeeo(forceDiscovery) {
 function runNeeo () {
   return new Promise(function (resolve, reject) {
     if (!config.brainport) {config.brainport = 4015}
-    const neeoSettings = {
+    neeoSettings = {
       brain: config.brainip.toString(),
       port: config.brainport.toString(),
       name: "metadriver",
       devices: driverTable
     };
+
+
     metaLog({type:LOG_TYPE.INFO, content:"Current directory: " + __dirname});
     metaLog({type:LOG_TYPE.INFO, content:"Trying to start the meta."});
-    
     neeoapi.startServer(neeoSettings)
       .then((result) => {
-        metaLog({type:LOG_TYPE.WARNING, content:"Driver running, you can search it on the neeo app."});
+        metaLog({type:LOG_TYPE.ALWAYS, content:"Driver running, you can search it on the neeo app."});
         metaLog({type:LOG_TYPE.INFO, content:result});
         if (brainDiscovered) {
             fs.writeFile(__dirname + '/config.js', JSON.stringify(config), err => {
@@ -716,52 +787,98 @@ function runNeeo () {
               resolve();
             })
           }
-      })
+        })
+
       .catch(err => {
            metaLog({type:LOG_TYPE.ERROR, content:'Failed running Neeo with error: ' + err});
            process.exit(1);
       });
     })
+
 }
-    
+function AlreadyhandlingAppCommand(Command) {     // Purpose: Eliminate repeated messages
+  // Command is passed, but we don not use it (yet).
+  if (EliminatingRepeatedActions) {
+    metaLog({type:LOG_TYPE.VERBOSE, content:'Suppressing repeated command: ' + Command});
+    return true 
+  }
+  
+  EliminatingRepeatedActions = true
+  setTimeout(() => {
+    EliminatingRepeatedActions = false;   //and reset after 3 seconds
+    }, 3000);
+  return false
+  }
 
-function enableMQTT (cont, deviceId) {
+function MetaMQTTHandler (cont, deviceId) {
+  mqttClient.subscribe(settings.mqtt_topic + cont.name + "/#", () => {});  //mqttClient.subscribe( "meta/#", () => {});
 
-  mqttClient.subscribe(settings.mqtt_topic + cont.name + "/#", () => {});
   mqttClient.on('message', function (topic, value) {
-      try {
+  try {
+    if (topic == "meta/.meta/Reload"&&value=="meta") {
+        if (!AlreadyhandlingAppCommand("reload")) {    // Eliminate repeated messages
+          metaLog({type:LOG_TYPE.ALWAYS, content:'Requesting neeo to remove Custom drivers'});
+          neeoapi.stopServer(neeoSettings)
+          .then((result) => {
+            metaLog({type:LOG_TYPE.ALWAYS, content:"Neeo reports successful removal"});
+            metaLog({type:LOG_TYPE.ALWAYS, content:"Now disconnect MQTT-connection"});
+            mqttClient.end(); 
+            cacheManager.DisplayCache();         // Show content of cache for debugging purposes
+            cacheManager.EraseCacheCompletely(); // clear cache so we start fresh
+            metaLog({type:LOG_TYPE.ALWAYS, content:"And reconnecting it, will start .meta too"});
+            mqttClient.reconnect();
+          })
+          .catch(err => {
+          metaLog({type:LOG_TYPE.ERROR, content:'Neeo reported this result for stopserver: ' + err});
+          process.exit(1);
+          });
+        } 
+    }
+    else 
+      if (topic == "meta/.meta/LOGLEVEL") {
+        if (!AlreadyhandlingAppCommand("Loglevel"))     // Eliminate repeated messages
+          OverrideLoglevel(value);
+      }
+      else 
+        if (topic == "meta/.meta/Clear" &&value == "Cache")  {
+          if (!AlreadyhandlingAppCommand("Cache"))   {  // Eliminate repeated messages
+            metaLog({type:LOG_TYPE.ALWAYS, content:"Clearing cache"});
+            cacheManager.EraseCacheCompletely(); // clear cache
+          }
+        }
+        else {
+          let theTopic = topic.split("/");
+          if (theTopic.length == 6 && theTopic[5] == "set") {
 
-        let theTopic = topic.split("/");
-        if (theTopic.length == 6 && theTopic[5] == "set") {
-
-          if (theTopic[3] == "button") {
-            cont.onButtonPressed(theTopic[4], theTopic[2]);
+            if (theTopic[3] == "button") {
+              cont.onButtonPressed(theTopic[4], theTopic[2]);
+            }
+            else if (theTopic[3] == "slider") {
+              let sliI = cont.sliderH.findIndex((sli)=>{return sli.name == theTopic[4]});
+              if (sliI>=0){
+                cont.sliderH[sliI].set(theTopic[2], value)
+              }   
+            }
+            else if (theTopic[3] == "switch") {
+              let sliI = cont.switchH.findIndex((sli)=>{return sli.name == theTopic[4]});
+              if (sliI>=0){
+                cont.switchH[sliI].set(theTopic[2], value)
+              }   
+            }
+            else if (theTopic[3] == "image") {
+              let imaI = cont.imageH.findIndex((ima)=>{return ima.name == theTopic[4]});
+              if (imaI>=0){
+                cont.imageH[imaI].set(theTopic[2], value)
+              }   
+            }
+            else if (theTopic[3] == "label") {
+              let labI = cont.labelH.findIndex((lab)=>{return lab.name == theTopic[4]});
+              if (labI>=0){
+                cont.labelH[labI].set(theTopic[2], value)
+              }   
+            }
           }
-          else if (theTopic[3] == "slider") {
-            let sliI = cont.sliderH.findIndex((sli)=>{return sli.name == theTopic[4]});
-            if (sliI>=0){
-              cont.sliderH[sliI].set(theTopic[2], value)
-            }   
-          }
-          else if (theTopic[3] == "switch") {
-            let sliI = cont.switchH.findIndex((sli)=>{return sli.name == theTopic[4]});
-            if (sliI>=0){
-              cont.switchH[sliI].set(theTopic[2], value)
-            }   
-          }
-          else if (theTopic[3] == "image") {
-            let imaI = cont.imageH.findIndex((ima)=>{return ima.name == theTopic[4]});
-            if (imaI>=0){
-              cont.imageH[imaI].set(theTopic[2], value)
-            }   
-          }
-          else if (theTopic[3] == "label") {
-            let labI = cont.labelH.findIndex((lab)=>{return lab.name == theTopic[4]});
-            if (labI>=0){
-              cont.labelH[labI].set(theTopic[2], value)
-            }   
-          }
-         }
+        }
       }
       catch (err) {
         metaLog({type:LOG_TYPE.ERROR, content:'Parsing incomming message on: '+settings.mqtt_topic + cont.name + "/command"});
@@ -769,54 +886,9 @@ function enableMQTT (cont, deviceId) {
       }
   })
 }
-console.log(".Meta starting");
 //MAIN
 process.chdir(__dirname);
-
-//Unleaching discovery
-//Mac addresses.
-find().then(devices => {
-  localByMacDevices = devices;
-  metaLog({type:LOG_TYPE.VERBOSE, content:'MAC discovery found: '});
-  metaLog({type:LOG_TYPE.VERBOSE, content:localByMacDevices});
-
-});
-
-//mDNS
-const browser = dnssd.Browser(dnssd.all(),{resolve:true});
-browser.on('serviceUp', (service) => {
-  metaLog({type:LOG_TYPE.VERBOSE, content:'mDNS discovery found: ' + service.name});
-  let tempBro = undefined;
-  try {
-     tempBro = dnssd.Browser(dnssd.tcp(service.name));
-  } catch (err) {
-    metaLog({type:LOG_TYPE.ERROR, content:'Error during mDNS discovery - ' + service.name});
-    metaLog({type:LOG_TYPE.ERROR, content:err});
-  }
-  if (tempBro) {
-    tempBro.on('serviceUp', (service) => {
-      metaLog({type:LOG_TYPE.VERBOSE, content:'mDNS discovery Service Up: ' + service.fullname});
-      if (0 > localDevices.findIndex((ld)=>{
-                return (ld.name == service.name && ld.fullname == service.fullname && ld.type == service.type && ld.domain == service.domain && ld.host == service.host)
-              })) 
-      {
-        localDevices.push({name:service.name, fullname:service.fullname, type:service.type, domain:service.domain, host:service.host, port:service.port, addresses:service.addresses })
-      }
-    });
-    tempBro.on('serviceDown', (service) => {
-      metaLog({type:LOG_TYPE.VERBOSE, content:'mDNS discovery Service Down: ' + service.fullname});
-    });
-    tempBro.start();
-  }
-});
-
-//mDNS DISCOVERY PART
-browser.start();
-setTimeout(() => {
-  browser.stop();
-  metaLog({type:LOG_TYPE.INFO, content:localDevices});
-}, 100000);
-
+metaLog({type:LOG_TYPE.ALWAYS, content:'.Meta starting'});
 if (process.argv.length>2) {
   try {
     if (process.argv[2]) {
@@ -843,15 +915,77 @@ if (process.argv.length>2) {
     process.exit();
   }
 }
+//Unleaching discovery
+//Mac addresses.
+find().then(devices => {
+  this.localByMacDevices = devices.sort();
+
+  metaLog({type:LOG_TYPE.VERBOSE, content:'MAC discovery found: '});
+  metaLog({type:LOG_TYPE.VERBOSE, content:this.localByMacDevices});
+});
+
+//mDNS
+const browser = dnssd.Browser(dnssd.all(),{resolve:true});
+browser.on('serviceUp', (service) => {
+  metaLog({type:LOG_TYPE.DEBUG, content:'mDNS discovery found: ' + service.name});
+  let tempBro = undefined;
+  try {
+     tempBro = dnssd.Browser(dnssd.tcp(service.name));
+  } catch (err) {
+    metaLog({type:LOG_TYPE.ERROR, content:'Error during mDNS discovery - ' + service.name});
+    metaLog({type:LOG_TYPE.ERROR, content:err});
+  }
+  if (tempBro) {
+    tempBro.on('serviceUp', (service) => {
+      metaLog({type:LOG_TYPE.DEBUG, content:'mDNS discovery Service Up: ' + service.fullname});
+      if (0 > localDevices.findIndex((ld)=>{
+                return (ld.name == service.name && ld.fullname == service.fullname && ld.type == service.type && ld.domain == service.domain && ld.host == service.host)
+              })) 
+      {
+        localDevices.push({name:service.name, fullname:service.fullname, type:service.type, domain:service.domain, host:service.host, port:service.port, addresses:service.addresses })
+      }
+    });
+    tempBro.on('serviceDown', (service) => {
+      metaLog({type:LOG_TYPE.DEBUG, content:'mDNS discovery Service Down: ' + service.fullname});
+    });
+    tempBro.start();
+  }
+});
+
+//mDNS DISCOVERY PART
+metaLog({type:LOG_TYPE.INFO, content:'mDNS discovery starting, this will take 100 seconds (of silence while we detect your devices)'});
+
+browser.start();
+setTimeout(() => {
+  browser.stop();
+  metaLog({type:LOG_TYPE.WARNING, content:'mDNS discovery stopped'});
+  metaLog({type:LOG_TYPE.DEBUG, content:localDevices});
+}, 100000);
+
+var TimesTell = 90
+for (var i=1;i<10;i++) // a crude way of counting down the mDNS process.
+  setTimeout(() => {
+  metaLog({type:LOG_TYPE.WARNING, content:'mDNS discovery still running, '+  (TimesTell ) + ' seconds before done'});
+  TimesTell = TimesTell - 10
+}, i * 10000);
 
 getConfig().then(() => {
-    mqttClient = mqtt.connect('mqtt://' + settings.mqtt, {clientId:"meta"}); // Always connect to the local mqtt broker
-    mqttClient.setMaxListeners(0); //CAREFULL OF MEMORY LEAKS HERE.
-    mqttClient.on('connect', (result) => {
+  metaLog({type:LOG_TYPE.VERBOSE, content:'Connecting to MQTT: ' + JSON.stringify(settings.mqtt)});
+  mqttClient = mqtt.connect('mqtt://' + settings.mqtt, {clientId:"meta"}); // Always connect to the local mqtt broker
+  mqttClient.setMaxListeners(0); //CAREFULL OF MEMORY LEAKS HERE.
+  mqttClient.on('error', (result) => {
+    metaLog({type:LOG_TYPE.ERROR, content:'Error connecting to MQTT: '+ result});
+    });
+    
+  mqttClient.on('connect', (result) => {
     createDevices()
-    .then (() => {
-      setupNeeo().then(() => {
+      .then (() => {
+        setupNeeo().then(() => {
       })
-    })
-  })
-})
+    });
+  });
+
+  mqttClient.on('end', (result) => {
+    metaLog({type:LOG_TYPE.ERROR, content:'MQTT-connection ended, restarting .meta locally'});
+    });
+});

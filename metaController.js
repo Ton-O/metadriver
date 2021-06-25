@@ -23,10 +23,12 @@ const CLI = 'cli';
 const REPL = 'repl';
 const WEBSOCKET = 'webSocket';
 const SOCKETIO = 'socketIO';
+const TELNET = 'telnet';
 const JSONTCP = 'jsontcp';
 const MQTT = 'mqtt';
 const WOL = 'wol';
-const { ProcessingManager, httpgetProcessor, httprestProcessor, httpgetSoapProcessor, httppostProcessor, cliProcessor, staticProcessor, webSocketProcessor, socketIOProcessor, jsontcpProcessor, mqttProcessor, replProcessor } = require('./ProcessingManager');
+const { ProcessingManager, httpgetProcessor, httprestProcessor, httpgetSoapProcessor, httppostProcessor, cliProcessor, staticProcessor, webSocketProcessor, socketIOProcessor, TelnetProcessor,jsontcpProcessor, mqttProcessor, replProcessor } = require('./ProcessingManager');
+
 const { metaMessage, LOG_TYPE } = require("./metaMessage");
 
 const processingManager = new ProcessingManager();
@@ -37,6 +39,7 @@ const myCliProcessor = new cliProcessor();
 const myStaticProcessor = new staticProcessor();
 const myWebSocketProcessor = new webSocketProcessor();
 const mySocketIOProcessor = new socketIOProcessor();
+const myTelnetProcessor = new TelnetProcessor();
 const myJsontcpProcessor = new jsontcpProcessor();
 const myMqttProcessor = new mqttProcessor();
 const myReplProcessor = new replProcessor();
@@ -76,9 +79,9 @@ module.exports = function controller(driver) {
   this.addListener = function(params) {
     params = JSON.parse(self.vault.readVariables(params, params.deviceId));
 
-    metaLog({type:LOG_TYPE.VERBOSE, content:'addListener', deviceId:params.deviceId});
-    metaLog({type:LOG_TYPE.VERBOSE, content:params, deviceId:params.deviceId});
-    metaLog({type:LOG_TYPE.VERBOSE, content:self.vault.variables, deviceId:params.deviceId});
+    metaLog({type:LOG_TYPE.VERBOSE, content:'addListener ' + params.name, deviceId:params.deviceId});
+    metaLog({type:LOG_TYPE.DEBUG, content:params, deviceId:params.deviceId});
+    metaLog({type:LOG_TYPE.DEBUG, content:self.vault.variables, deviceId:params.deviceId});
     let listIndent = self.listeners.findIndex((listen) => {return listen.command == params.command});
     if (listIndent < 0) {//the command is new.
       if (params.evalwrite) {
@@ -118,7 +121,7 @@ module.exports = function controller(driver) {
 
   this.addConnection = function(params) {
     metaLog({type:LOG_TYPE.VERBOSE, content:'addConnection:'});
-    metaLog({type:LOG_TYPE.VERBOSE, content:params});
+    metaLog({type:LOG_TYPE.DEBUG, content:params});
     self.connectionH.push(params);
   };
 
@@ -321,6 +324,9 @@ module.exports = function controller(driver) {
     else if (commandtype == SOCKETIO) {
       processingManager.processor = mySocketIOProcessor;
     }
+    else if (commandtype == TELNET) {
+      processingManager.processor = myTelnetProcessor;
+    }
     else if (commandtype == JSONTCP) {
       processingManager.processor = myJsontcpProcessor;
     }
@@ -334,10 +340,13 @@ module.exports = function controller(driver) {
   };
 
   this.initiateProcessor = function(commandtype) { // Initiate communication protocoles
+    metaLog({type:LOG_TYPE.VERBOSE, content:'initiateprocessor for: '+commandtype});
     return new Promise(function (resolve, reject) {
       self.assignProcessor(commandtype); //to get the correct processing manager.
+      metaLog({type:LOG_TYPE.VERBOSE, content:'self assign for: '+commandtype});
       processingManager.initiate(self.getConnection(commandtype))
         .then((result) => {
+          metaLog({type:LOG_TYPE.VERBOSE, content:'initiateprocessor result: '+result});
           resolve(result);
         })
         .catch((err) => {
@@ -393,12 +402,13 @@ module.exports = function controller(driver) {
       .catch((err) => {reject (err);});
     });    
   };
-
+  
   this.stopListenProcessor = function(listener, deviceId) { // process any command according to the target protocole
     return new Promise(function (resolve, reject) {
       if (listener.deviceId == deviceId) {
         self.assignProcessor(listener.type);
-        let connection = self.getConnection(listener.commandtype);
+        console.log("Stoplistening for ",listener.type,listener.command) 
+        let connection = self.getConnection(listener.command);
         processingManager.stopListen(listener, connection);
       }
       else {
@@ -424,6 +434,9 @@ module.exports = function controller(driver) {
           myQueryT[index] = self.vault.readVariables(myQueryT[index], deviceId);
           const params = {'query' : myQueryT[index], 'data' : data};
           processingManager.query(params).then((data) => {
+            metaLog({type:LOG_TYPE.VERBOSE, content:'Result'});
+            metaLog({type:LOG_TYPE.VERBOSE, content:data});
+
             resolve(data);
           });
         });
@@ -431,6 +444,8 @@ module.exports = function controller(driver) {
       }
       Promise.all(promiseT).then((values) => {
         metaLog({type:LOG_TYPE.VERBOSE, content:'Result of all query processors : ' + values, deviceId:deviceId});
+        metaLog({type:LOG_TYPE.VERBOSE, content:'Number of values : ' + values.length, deviceId:deviceId});
+
         if (values.length == 1) {
           resolve(values[0]);
         }
@@ -450,8 +465,7 @@ module.exports = function controller(driver) {
   };
   
   this.onListenExecute = function (result, listener, deviceId) {
-    metaLog({type:LOG_TYPE.VERBOSE, content:'Event received', deviceId:deviceId});
-    metaLog({type:LOG_TYPE.VERBOSE, content:result, deviceId:deviceId});
+//    process.stdout.write('.');  
   
     self.queryProcessor(result, listener.queryresult, listener.type, deviceId).then((result) => {
        if (listener.evalwrite) {self.evalWrite(listener.evalwrite, result, deviceId);}
@@ -529,6 +543,8 @@ module.exports = function controller(driver) {
 
       if (name == '__CLEANUP') {//listener management to listen to other devices. Stop listening on power off.
         self.listeners.forEach(listener => {
+          console.log("Listeners:",listener)
+
           if (listener.deviceId == deviceId) {//we stop only the listeners of this device !!!
             self.stopListenProcessor(listener, deviceId);
           }
