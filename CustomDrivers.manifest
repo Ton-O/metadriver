@@ -37,7 +37,7 @@
       "OrgRepo": "https://github.com/Ton-O/Meta_Telnet"
     },
     {
-      "name": "ADB",
+      "name": "ADBdroid",
       "Author": "TonO",
       "version": 1,
       "DriverLocation": "https://raw.githubusercontent.com/Ton-O//meta-ADBdroid/main/ADBDroid.json",
