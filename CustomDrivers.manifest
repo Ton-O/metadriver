@@ -27,7 +27,16 @@
       "FlowLocation": "https://raw.githubusercontent.com/jac459/meta-SamsungTV2012/main/node-red%20Flow/SamsungTV2012%20Flow.json",
       "OrgRepo": "https://github.com/jac459/meta-SamsungTV2012"
     },
-     {
+    {
+      "name": "ADB",
+      "Author": "TonO",
+      "version": 1,
+      "DriverLocation": "https://raw.githubusercontent.com/jac459/meta-ADBdroid/main/ADBDroid.json",
+      "IconLocation": "https://raw.githubusercontent.com/jac459/meta-ADBdroid/main/ADBDroid.jpg",
+      "FlowLocation": "",
+      "OrgRepo": "https://github.com/jac459/meta-ADBdroid"
+    },
+    {
       "name": "Telnet",
       "Author": "TonO",
       "version": 1,
